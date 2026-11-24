@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SilicaHost — Multi-Emulator Browser Host</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --panel: #1a1d24;
+      --border: #2a2f3a;
+      --text: #e6e9ef;
+      --muted: #8b93a7;
+      --accent: #6c9eff;
+      --green: #3dd68c;
+      --red: #ff6b6b;
+      --mono: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      padding: 0.6rem 1rem;
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+    }
+    header h1 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+    header .badge {
+      font-size: 0.7rem;
+      background: #243049;
+      color: var(--accent);
+      padding: 0.15rem 0.45rem;
+      border-radius: 4px;
+    }
+    .toolbar {
+      display: flex;
+      gap: 0.4rem;
+      margin-left: auto;
+    }
+    button, .file-btn {
+      background: #243049;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.35rem 0.75rem;
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    button:hover, .file-btn:hover { background: #2d3748; }
+    button.primary { background: var(--accent); color: #0f1115; border-color: transparent; font-weight: 600; }
+    button.primary:hover { filter: brightness(1.1); }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    main {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 220px 1fr 280px;
+      min-height: 0;
+    }
+    .sidebar, .inspector {
+      background: var(--panel);
+      border-right: 1px solid var(--border);
+      padding: 0.75rem;
+      overflow-y: auto;
+    }
+    .inspector { border-right: none; border-left: 1px solid var(--border); }
+    .sidebar h2, .inspector h2 {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+      margin-bottom: 0.5rem;
+    }
+    .instance-list { list-style: none; }
+    .instance-list li {
+      padding: 0.45rem 0.6rem;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      margin-bottom: 0.25rem;
+    }
+    .instance-list li.active { background: #243049; color: var(--accent); }
+    .instance-list li:hover:not(.active) { background: #1f2430; }
+    .viewport {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .console {
+      flex: 1;
+      background: #0c0e12;
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      padding: 0.75rem 1rem;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      line-height: 1.45;
+    }
+    .status-bar {
+      display: flex;
+      gap: 1.5rem;
+      padding: 0.4rem 1rem;
+      background: var(--panel);
+      border-top: 1px solid var(--border);
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    .status-bar span strong { color: var(--text); font-weight: 500; }
+    .reg-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.25rem 0.75rem;
+      font-family: var(--mono);
+      font-size: 0.78rem;
+    }
+    .reg-grid div { display: flex; justify-content: space-between; }
+    .reg-grid .name { color: var(--muted); }
+    .drop-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(108, 158, 255, 0.12);
+      border: 3px dashed var(--accent);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.4rem;
+      color: var(--accent);
+    }
+    body.dragover .drop-overlay { display: flex; }
+    .hint {
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-top: 0.75rem;
+      line-height: 1.4;
+    }
+  </style>
+</head>
+<body>
+  <div class="drop-overlay">Drop binary to load into active instance</div>
+
+  <header>
+    <h1>SilicaHost</h1>
+    <span class="badge">MIT · Multi-Emulator</span>
+    <div class="toolbar">
+      <button id="btn-new">+ New AArch64</button>
+      <button id="btn-step">Step</button>
+      <button id="btn-run">Run 1000</button>
+      <button id="btn-reset">Reset</button>
+      <label class="file-btn">
+        Load Binary
+        <input type="file" id="file-input" hidden accept=".bin,.elf,.img,*" />
+      </label>
+    </div>
+  </header>
+
+  <main>
+    <aside class="sidebar">
+      <h2>Instances</h2>
+      <ul class="instance-list" id="instance-list"></ul>
+      <p class="hint">
+        SilicaHost can host multiple different emulators via a clean plugin contract.
+        The built-in core is a functional AArch64 inspired by Silica-Allah.
+      </p>
+    </aside>
+
+    <section class="viewport">
+      <div class="console" id="console">SilicaHost ready.
+Drop a binary or click “+ New AArch64”.
+</div>
+      <div class="status-bar">
+        <span>PC <strong id="stat-pc">0x0</strong></span>
+        <span>State <strong id="stat-state">idle</strong></span>
+        <span>Arch <strong id="stat-arch">—</strong></span>
+      </div>
+    </section>
+
+    <aside class="inspector">
+      <h2>Registers</h2>
+      <div class="reg-grid" id="reg-grid">
+        <div><span class="name">—</span><span>—</span></div>
+      </div>
+    </aside>
+  </main>
+
+  <script type="module">
+    // ─── Minimal inlined Silica-AArch64 core (same logic as src/cores/silica-aarch64.ts) ───
+    const MEM_SIZE = 1024 * 1024;
+
+    class SilicaAArch64 {
+      constructor() {
+        this.id = "silica-aarch64";
+        this.name = "Silica AArch64 (Functional)";
+        this.version = "0.1.0";
+        this.supportedArchs = ["aarch64"];
+        this.capabilities = ["functional-only"];
+        this.mem = new Uint8Array(MEM_SIZE);
+        this.regs = new BigUint64Array(32);
+        this.pc = 0n;
+        this.sp = BigInt(MEM_SIZE - 16);
+        this.halted = false;
+        this.running = false;
+        this.listeners = {};
+      }
+
+      async load() { this.reset(); }
+      async start() { this.running = true; this.halted = false; }
+      pause() { this.running = false; }
+      resume() { this.running = true; this.halted = false; }
+      reset() {
+        this.mem.fill(0);
+        this.regs.fill(0n);
+        this.pc = 0n;
+        this.sp = BigInt(MEM_SIZE - 16);
+        this.halted = false;
+        this.running = false;
+      }
+      stop() { this.running = false; this.halted = true; }
+      destroy() { this.stop(); this.listeners = {}; }
+
+      async loadBinary(data, options = {}) {
+        const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+        const entry = options.entryPoint ?? 0;
+        if (entry + bytes.length > MEM_SIZE) throw new Error("Binary too large");
+        this.mem.set(bytes, entry);
+        this.pc = BigInt(entry);
+        this.emit("console", `[silica] loaded ${bytes.length} bytes at 0x${entry.toString(16)}\n`);
+      }
+
+      getMemoryMap() {
+        return [{ name: "RAM", base: 0, size: MEM_SIZE, writable: true }];
+      }
+
+      step(n = 1) {
+        for (let i = 0; i < n && !this.halted; i++) this.executeOne();
+      }
+
+      runFor(n) {
+        for (let i = 0; i < n && !this.halted && this.running; i++) this.executeOne();
+      }
+
+      getRegisters() {
+        const out = { PC: this.pc, SP: this.sp };
+        for (let i = 0; i < 31; i++) out[`X${i}`] = this.regs[i];
+        return out;
+      }
+
+      getMemory(addr, len) {
+        if (addr < 0 || addr + len > MEM_SIZE) return new Uint8Array(len);
+        return this.mem.slice(addr, addr + len);
+      }
+
+      setMemory(addr, data) {
+        if (addr < 0 || addr + data.length > MEM_SIZE) return;
+        this.mem.set(data, addr);
+      }
+
+      getPC() { return Number(this.pc); }
+
+      on(event, cb) {
+        if (!this.listeners[event]) this.listeners[event] = [];
+        this.listeners[event].push(cb);
+      }
+      off(event, cb) {
+        if (!this.listeners[event]) return;
+        this.listeners[event] = this.listeners[event].filter(f => f !== cb);
+      }
+      emit(event, ...args) {
+        (this.listeners[event] || []).forEach(cb => cb(...args));
+      }
+
+      executeOne() {
+        if (this.halted) return;
+        const addr = Number(this.pc);
+        if (addr + 4 > MEM_SIZE) { this.halt("PC out of range"); return; }
+
+        // Force unsigned 32-bit (JS bitwise operators are signed)
+        const instr = (this.mem[addr] | (this.mem[addr+1]<<8) | (this.mem[addr+2]<<16) | (this.mem[addr+3]<<24)) >>> 0;
+        this.pc += 4n;
+
+        if (instr === 0xd503201f) return; // NOP
+        if (instr === 0xd65f03c0) { this.pc = this.regs[30]; return; } // RET
+
+        // MOVZ Xd, #imm16  (mask forced unsigned)
+        if (((instr & 0xff800000) >>> 0) === 0xd2800000) {
+          const rd = instr & 0x1f;
+          const imm16 = (instr >>> 5) & 0xffff;
+          const hw = (instr >>> 21) & 0x3;
+          const value = BigInt(imm16) << BigInt(hw * 16);
+          if (rd !== 31) this.regs[rd] = value;
+          return;
+        }
+
+        // ADD Xd, Xn, #imm12
+        if (((instr & 0xffc00000) >>> 0) === 0x91000000) {
+          const rd = instr & 0x1f;
+          const rn = (instr >>> 5) & 0x1f;
+          const imm12 = (instr >>> 10) & 0xfff;
+          const a = rn === 31 ? 0n : this.regs[rn];
+          if (rd !== 31) this.regs[rd] = a + BigInt(imm12);
+          return;
+        }
+
+        // SUB Xd, Xn, #imm12
+        if (((instr & 0xffc00000) >>> 0) === 0xd1000000) {
+          const rd = instr & 0x1f;
+          const rn = (instr >>> 5) & 0x1f;
+          const imm12 = (instr >>> 10) & 0xfff;
+          const a = rn === 31 ? 0n : this.regs[rn];
+          if (rd !== 31) this.regs[rd] = a - BigInt(imm12);
+          return;
+        }
+
+        // B imm26
+        if (((instr & 0xfc000000) >>> 0) === 0x14000000) {
+          let imm26 = instr & 0x03ffffff;
+          if (imm26 & 0x02000000) imm26 |= 0xfc000000; // sign-extend
+          // force signed interpretation for the offset
+          imm26 = imm26 | 0; // keep as 32-bit
+          if (imm26 & 0x80000000) imm26 = imm26 - 0x100000000;
+          this.pc = this.pc - 4n + BigInt(imm26 * 4);
+          return;
+        }
+
+        this.halt(`unimplemented 0x${instr.toString(16).padStart(8,"0")} at 0x${(this.pc-4n).toString(16)}`);
+      }
+
+      halt(reason) {
+        this.halted = true;
+        this.running = false;
+        this.emit("console", `[silica] HALT: ${reason}\n`);
+        this.emit("halt", reason);
+      }
+    }
+
+    // ─── Host ───────────────────────────────────────────────────────────────
+    const instances = [];
+    let activeId = null;
+
+    const $ = (sel) => document.querySelector(sel);
+    const consoleEl = $("#console");
+    const listEl = $("#instance-list");
+    const regGrid = $("#reg-grid");
+
+    function log(msg) {
+      consoleEl.textContent += msg;
+      consoleEl.scrollTop = consoleEl.scrollHeight;
+    }
+
+    function createInstance() {
+      const core = new SilicaAArch64();
+      const id = instances.length;
+      core.on("console", (m) => { if (id === activeId) log(m); });
+      core.on("halt", () => refreshUI());
+      instances.push({ id, core, name: `AArch64 #${id}` });
+      activeId = id;
+      renderList();
+      refreshUI();
+      log(`[host] created ${core.name}\n`);
+      return core;
+    }
+
+    function renderList() {
+      listEl.innerHTML = instances.map(inst =>
+        `<li class="${inst.id === activeId ? "active" : ""}" data-id="${inst.id}">${inst.name}</li>`
+      ).join("");
+      listEl.querySelectorAll("li").forEach(li => {
+        li.onclick = () => {
+          activeId = Number(li.dataset.id);
+          renderList();
+          refreshUI();
+        };
+      });
+    }
+
+    function active() {
+      return instances.find(i => i.id === activeId)?.core;
+    }
+
+    function refreshUI() {
+      const core = active();
+      if (!core) {
+        $("#stat-pc").textContent = "—";
+        $("#stat-state").textContent = "no instance";
+        $("#stat-arch").textContent = "—";
+        regGrid.innerHTML = "";
+        return;
+      }
+      const regs = core.getRegisters();
+      $("#stat-pc").textContent = "0x" + Number(regs.PC).toString(16);
+      $("#stat-state").textContent = core.halted ? "halted" : (core.running ? "running" : "paused");
+      $("#stat-arch").textContent = core.supportedArchs[0];
+
+      const names = ["PC", "SP", ...Array.from({length: 8}, (_, i) => `X${i}`)];
+      regGrid.innerHTML = names.map(n => {
+        const v = regs[n];
+        const hex = typeof v === "bigint" ? "0x" + v.toString(16) : String(v);
+        return `<div><span class="name">${n}</span><span>${hex}</span></div>`;
+      }).join("");
+    }
+
+    // ─── Demo program: MOVZ X0, #42; ADD X0, X0, #8; HLT-like (unimpl) ─────
+    function loadDemo(core) {
+      // MOVZ X0, #42          → D2800540
+      // ADD  X0, X0, #8       → 91002000
+      // NOP                   → D503201F
+      // (then will hit unimplemented and halt)
+      const code = new Uint8Array([
+        0x40, 0x05, 0x80, 0xd2, // MOVZ X0, #42
+        0x00, 0x20, 0x00, 0x91, // ADD  X0, X0, #8
+        0x1f, 0x20, 0x03, 0xd5, // NOP
+        0x00, 0x00, 0x00, 0x00, // invalid → halt
+      ]);
+      core.loadBinary(code);
+      log("[host] loaded demo: MOVZ X0,#42; ADD X0,X0,#8; NOP\n");
+    }
+
+    // ─── Wire UI ────────────────────────────────────────────────────────────
+    $("#btn-new").onclick = () => {
+      const core = createInstance();
+      loadDemo(core);
+      refreshUI();
+    };
+
+    $("#btn-step").onclick = () => {
+      const core = active();
+      if (!core) return;
+      core.step(1);
+      refreshUI();
+    };
+
+    $("#btn-run").onclick = () => {
+      const core = active();
+      if (!core) return;
+      core.running = true;
+      core.runFor(1000);
+      refreshUI();
+    };
+
+    $("#btn-reset").onclick = () => {
+      const core = active();
+      if (!core) return;
+      core.reset();
+      loadDemo(core);
+      refreshUI();
+      log("[host] reset\n");
+    };
+
+    $("#file-input").onchange = async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const core = active() || createInstance();
+      const buf = await file.arrayBuffer();
+      await core.loadBinary(buf);
+      refreshUI();
+      log(`[host] loaded file ${file.name} (${buf.byteLength} bytes)\n`);
+    };
+
+    // Drag & drop
+    window.addEventListener("dragover", (e) => { e.preventDefault(); document.body.classList.add("dragover"); });
+    window.addEventListener("dragleave", () => document.body.classList.remove("dragover"));
+    window.addEventListener("drop", async (e) => {
+      e.preventDefault();
+      document.body.classList.remove("dragover");
+      const file = e.dataTransfer.files[0];
+      if (!file) return;
+      const core = active() || createInstance();
+      const buf = await file.arrayBuffer();
+      await core.loadBinary(buf);
+      refreshUI();
+      log(`[host] dropped ${file.name}\n`);
+    });
+
+    // Boot with one instance + demo
+    const first = createInstance();
+    loadDemo(first);
+    refreshUI();
+  </script>
+</body>
+</html>
